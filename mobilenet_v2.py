@@ -10,6 +10,7 @@
 from keras.models import Model
 from keras.layers import Input, Conv2D, GlobalAveragePooling2D, Dropout
 from keras.layers import Activation, BatchNormalization, Add, Reshape, DepthwiseConv2D
+from keras.layers import LeakyReLU, Flatten, Dense
 from keras.utils.vis_utils import plot_model
 
 from keras import backend as K
@@ -51,12 +52,12 @@ def _conv_block(inputs, filters, kernel, strides):
 
     channel_axis = 1 if K.image_data_format() == 'channels_first' else -1
 
-    x = Conv2D(filters, kernel, padding='same', strides=strides)(inputs)
+    x = Conv2D(filters, kernel_size=kernel, padding='same', strides=strides)(inputs)
     x = BatchNormalization(axis=channel_axis)(x)
     return Activation(relu6)(x)
 
 
-def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False):
+def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False, leaky=False):
     """Bottleneck
     This function defines a basic bottleneck structure.
 
@@ -83,13 +84,16 @@ def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False):
     # Width
     cchannel = int(filters * alpha)
 
-    x = _conv_block(inputs, tchannel, (1, 1), (1, 1))
+    x = _conv_block(inputs, tchannel, 1, 1)
 
-    x = DepthwiseConv2D(kernel, strides=(s, s), depth_multiplier=1, padding='same')(x)
+    x = DepthwiseConv2D(kernel_size=kernel, strides=s, depth_multiplier=1, padding='same')(x)
     x = BatchNormalization(axis=channel_axis)(x)
-    x = Activation(relu6)(x)
+    if leaky:
+        x = LeakyReLU(alpha=0.2)(x)
+    else:
+        x = Activation(relu6)(x)
 
-    x = Conv2D(cchannel, (1, 1), strides=(1, 1), padding='same')(x)
+    x = Conv2D(cchannel, kernel_size=1, strides=1, padding='same')(x)
     x = BatchNormalization(axis=channel_axis)(x)
 
     if r:
@@ -162,7 +166,55 @@ def MobileNetv2(input_shape, k, alpha=1.0):
     x = GlobalAveragePooling2D()(x)
     x = Reshape((1, 1, last_filters))(x)
     x = Dropout(0.3, name='Dropout')(x)
-    x = Conv2D(k, (1, 1), padding='same')(x)
+    x = Conv2D(k, kernel_size=1, padding='same')(x)
+
+
+    x = Activation('softmax', name='softmax')(x)
+    output = Reshape((k,))(x)
+
+    model = Model(inputs, output)
+    # plot_model(model, to_file='images/MobileNetv2.png', show_shapes=True)
+
+    return model
+
+
+def MobileNetv2_leaky(input_shape, k, alpha=1.0):
+    """MobileNetv2
+    This function defines a MobileNetv2 architectures.
+
+    # Arguments
+        input_shape: An integer or tuple/list of 3 integers, shape
+            of input tensor.
+        k: Integer, number of classes.
+        alpha: Integer, width multiplier, better in [0.35, 0.50, 0.75, 1.0, 1.3, 1.4].
+
+    # Returns
+        MobileNetv2 model.
+    """
+    inputs = Input(shape=input_shape)
+
+    leaky_t = 6
+    first_filters = _make_divisible(32 * alpha, 8)
+    x = _conv_block(inputs, first_filters, (3, 3), strides=(2, 2))
+
+    x = _inverted_residual_block(x, 16, (3, 3), t=1, alpha=alpha, strides=1, n=1)
+    x = _inverted_residual_block(x, 24, (3, 3), t=leaky_t, alpha=alpha, strides=2, n=2)
+    x = _inverted_residual_block(x, 32, (3, 3), t=leaky_t, alpha=alpha, strides=2, n=3)
+    x = _inverted_residual_block(x, 64, (3, 3), t=leaky_t, alpha=alpha, strides=2, n=4)
+    x = _inverted_residual_block(x, 96, (3, 3), t=leaky_t, alpha=alpha, strides=1, n=3)
+    x = _inverted_residual_block(x, 160, (3, 3), t=leaky_t, alpha=alpha, strides=2, n=3)
+    x = _inverted_residual_block(x, 320, (3, 3), t=leaky_t, alpha=alpha, strides=1, n=1)
+
+    if alpha > 1.0:
+        last_filters = _make_divisible(1280 * alpha, 8)
+    else:
+        last_filters = 1280
+
+    x = _conv_block(x, last_filters, (1, 1), strides=(1, 1))
+    x = GlobalAveragePooling2D()(x)
+    x = Reshape((1, 1, last_filters))(x)
+    x = Dropout(0.3, name='Dropout')(x)
+    x = Conv2D(k, kernel_size=1, padding='same')(x)
 
     x = Activation('softmax', name='softmax')(x)
     output = Reshape((k,))(x)
@@ -175,4 +227,6 @@ def MobileNetv2(input_shape, k, alpha=1.0):
 
 if __name__ == '__main__':
     model = MobileNetv2((224, 224, 3), 100, 1.0)
+    print(model.summary())
+    model = MobileNetv2_leaky((224, 224, 3), 100, 1.0)
     print(model.summary())

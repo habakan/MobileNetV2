@@ -6,45 +6,67 @@ import sys
 import argparse
 import pandas as pd
 
-from mobilenet_v2 import MobileNetv2
+from mobilenet_v2 import MobileNetv2, MobileNetv2_leaky
+from keras.utils.training_utils import multi_gpu_model
 
 from keras.optimizers import Adam
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping
 from keras.layers import Conv2D, Reshape, Activation
 from keras.models import Model
+import tensorflow as tf
+
+'''
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+tf.keras.backend.set_session(tf.Session(config=config))
+'''
+
+gpu_count = 4
+
+parser = argparse.ArgumentParser()
+# Required arguments.
+parser.add_argument(
+    "--classes",
+    help="The number of classes of dataset.")
+# Optional arguments.
+parser.add_argument(
+    "--size",
+    default=224,
+    help="The image size of train sample.")
+parser.add_argument(
+    "--batch",
+    default=32,
+    help="The number of train samples per batch.")
+parser.add_argument(
+    "--epochs",
+    default=300,
+    help="The number of train iterations.")
+parser.add_argument(
+    "--weights",
+    default=False,
+    help="Fine tune with other weights.")
+parser.add_argument(
+    "--tclasses",
+    default=0,
+    help="The number of classes of pre-trained model.")
+parser.add_argument(
+    "--train_dir",
+    default="data/train",
+    help="path of train directory")
+parser.add_argument(
+    "--val_dir",
+    default="data/validation",
+    help="path of validation directory")
+parser.add_argument(
+    "--save_model",
+    default="model/weights.h5",
+    help="path of save_model")
+
+args = parser.parse_args()
 
 
 def main(argv):
-    parser = argparse.ArgumentParser()
-    # Required arguments.
-    parser.add_argument(
-        "--classes",
-        help="The number of classes of dataset.")
-    # Optional arguments.
-    parser.add_argument(
-        "--size",
-        default=224,
-        help="The image size of train sample.")
-    parser.add_argument(
-        "--batch",
-        default=32,
-        help="The number of train samples per batch.")
-    parser.add_argument(
-        "--epochs",
-        default=300,
-        help="The number of train iterations.")
-    parser.add_argument(
-        "--weights",
-        default=False,
-        help="Fine tune with other weights.")
-    parser.add_argument(
-        "--tclasses",
-        default=0,
-        help="The number of classes of pre-trained model.")
-
-    args = parser.parse_args()
-
     train(int(args.batch), int(args.epochs), int(args.classes), int(args.size), args.weights, int(args.tclasses))
 
 
@@ -63,8 +85,10 @@ def generate(batch, size):
     """
 
     #  Using the data Augmentation in traning data
-    ptrain = 'data/train'
-    pval = 'data/validation'
+    #ptrain = 'data/train'
+    ptrain = args.train_dir
+    #pval = 'data/validation'
+    pval = args.val_dir
 
     datagen1 = ImageDataGenerator(
         rescale=1. / 255,
@@ -140,7 +164,10 @@ def train(batch, epochs, num_classes, size, weights, tclasses):
         model = MobileNetv2((size, size, 3), tclasses)
         model = fine_tune(num_classes, weights, model)
     else:
-        model = MobileNetv2((size, size, 3), num_classes)
+        #model = MobileNetv2((size, size, 3), num_classes)
+        model = MobileNetv2_leaky((size, size, 3), num_classes)
+
+    model = multi_gpu_model(model, gpus=gpu_count) 
 
     opt = Adam()
     earlystop = EarlyStopping(monitor='val_acc', patience=30, verbose=0, mode='auto')
@@ -159,7 +186,7 @@ def train(batch, epochs, num_classes, size, weights, tclasses):
 
     df = pd.DataFrame.from_dict(hist.history)
     df.to_csv('model/hist.csv', encoding='utf-8', index=False)
-    model.save_weights('model/weights.h5')
+    model.save_weights(args.save_model)
 
 
 if __name__ == '__main__':
