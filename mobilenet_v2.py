@@ -7,10 +7,14 @@
 """
 
 
+import tensorflow as tf
+from tensorflow.python.framework import graph_util
+from tensorflow.python.framework import graph_io
+
 from keras.models import Model
 from keras.layers import Input, Conv2D, GlobalAveragePooling2D, Dropout
 from keras.layers import Activation, BatchNormalization, Add, Reshape, DepthwiseConv2D
-from keras.layers import LeakyReLU, Flatten, Dense
+from keras.layers import LeakyReLU, PReLU, Flatten, Dense
 from keras.utils.vis_utils import plot_model
 
 from keras import backend as K
@@ -57,7 +61,7 @@ def _conv_block(inputs, filters, kernel, strides):
     return Activation(relu6)(x)
 
 
-def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False, leaky=False):
+def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False, mode="relu"):
     """Bottleneck
     This function defines a basic bottleneck structure.
 
@@ -88,13 +92,16 @@ def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False, leaky=False):
 
     x = DepthwiseConv2D(kernel_size=kernel, strides=s, depth_multiplier=1, padding='same')(x)
     x = BatchNormalization(axis=channel_axis)(x)
-    if leaky:
+    if mode=="leaky":
         x = LeakyReLU(alpha=0.2)(x)
+    elif mode=="prelu":
+        x = PReLU(shared_axes=[1, 2])(x)
     else:
         x = Activation(relu6)(x)
 
     x = Conv2D(cchannel, kernel_size=1, strides=1, padding='same')(x)
     x = BatchNormalization(axis=channel_axis)(x)
+    # x = PReLU(shared_axes=[1, 2])(x)
 
     if r:
         x = Add()([x, inputs])
@@ -102,7 +109,7 @@ def _bottleneck(inputs, filters, kernel, t, alpha, s, r=False, leaky=False):
     return x
 
 
-def _inverted_residual_block(inputs, filters, kernel, t, alpha, strides, n):
+def _inverted_residual_block(inputs, filters, kernel, t, alpha, strides, n, mode="relu"):
     """Inverted Residual Block
     This function defines a sequence of 1 or more identical layers.
 
@@ -126,12 +133,12 @@ def _inverted_residual_block(inputs, filters, kernel, t, alpha, strides, n):
     x = _bottleneck(inputs, filters, kernel, t, alpha, strides)
 
     for i in range(1, n):
-        x = _bottleneck(x, filters, kernel, t, alpha, 1, True)
+        x = _bottleneck(x, filters, kernel, t, alpha, 1, True, mode)
 
     return x
 
 
-def MobileNetv2(input_shape, k, alpha=1.0):
+def MobileNetv2(input_shape, k, alpha=1.0, mode="relu"):
     """MobileNetv2
     This function defines a MobileNetv2 architectures.
 
@@ -149,13 +156,15 @@ def MobileNetv2(input_shape, k, alpha=1.0):
     first_filters = _make_divisible(32 * alpha, 8)
     x = _conv_block(inputs, first_filters, (3, 3), strides=(2, 2))
 
-    x = _inverted_residual_block(x, 16, (3, 3), t=1, alpha=alpha, strides=1, n=1)
-    x = _inverted_residual_block(x, 24, (3, 3), t=6, alpha=alpha, strides=2, n=2)
-    x = _inverted_residual_block(x, 32, (3, 3), t=6, alpha=alpha, strides=2, n=3)
-    x = _inverted_residual_block(x, 64, (3, 3), t=6, alpha=alpha, strides=2, n=4)
-    x = _inverted_residual_block(x, 96, (3, 3), t=6, alpha=alpha, strides=1, n=3)
-    x = _inverted_residual_block(x, 160, (3, 3), t=6, alpha=alpha, strides=2, n=3)
-    x = _inverted_residual_block(x, 320, (3, 3), t=6, alpha=alpha, strides=1, n=1)
+    expand_t = 6
+    x = _inverted_residual_block(x, 16, (3, 3), t=1, alpha=alpha, strides=1, n=1, mode=mode)
+    x = _inverted_residual_block(x, 24, (3, 3), t=expand_t, alpha=alpha, strides=2, n=2, mode=mode)
+    x = _inverted_residual_block(x, 32, (3, 3), t=expand_t, alpha=alpha, strides=2, n=3, mode=mode)
+    x = _inverted_residual_block(x, 64, (3, 3), t=expand_t, alpha=alpha, strides=2, n=4, mode=mode)
+    x = _inverted_residual_block(x, 96, (3, 3), t=expand_t, alpha=alpha, strides=1, n=3, mode=mode)
+    x = _inverted_residual_block(x, 160, (3, 3), t=expand_t, alpha=alpha, strides=2, n=3, mode=mode)
+    x = _inverted_residual_block(x, 320, (3, 3), t=expand_t, alpha=alpha, strides=1, n=1, mode=mode)
+
 
     if alpha > 1.0:
         last_filters = _make_divisible(1280 * alpha, 8)
@@ -226,7 +235,16 @@ def MobileNetv2_leaky(input_shape, k, alpha=1.0):
 
 
 if __name__ == '__main__':
-    model = MobileNetv2((224, 224, 3), 100, 1.0)
-    print(model.summary())
-    model = MobileNetv2_leaky((224, 224, 3), 100, 1.0)
-    print(model.summary())
+
+    run_meta = tf.RunMetadata()
+    with tf.Session(graph=tf.Graph()) as sess:
+        K.set_session(sess)
+        model = MobileNetv2((224, 224, 3), 100, 1.0, 'relu')
+        print(model.summary())
+        opts = tf.profiler.ProfileOptionBuilder.float_operation()    
+        flops = tf.profiler.profile(sess.graph, run_meta=run_meta, cmd='op', options=opts)
+
+        opts = tf.profiler.ProfileOptionBuilder.trainable_variables_parameter()    
+        params = tf.profiler.profile(sess.graph, run_meta=run_meta, cmd='op', options=opts)
+
+        print("{:,} --- {:,}".format(flops.total_float_ops, params.total_parameters))

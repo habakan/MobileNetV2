@@ -22,7 +22,7 @@ config.gpu_options.allow_growth = True
 tf.keras.backend.set_session(tf.Session(config=config))
 '''
 
-gpu_count = 4
+gpu_count = 2
 
 parser = argparse.ArgumentParser()
 # Required arguments.
@@ -62,6 +62,10 @@ parser.add_argument(
     "--save_model",
     default="model/weights.h5",
     help="path of save_model")
+parser.add_argument(
+    "--mode",
+    default="relu",
+    help="model_mode")
 
 args = parser.parse_args()
 
@@ -164,9 +168,9 @@ def train(batch, epochs, num_classes, size, weights, tclasses):
         model = MobileNetv2((size, size, 3), tclasses)
         model = fine_tune(num_classes, weights, model)
     else:
-        #model = MobileNetv2((size, size, 3), num_classes)
-        model = MobileNetv2_leaky((size, size, 3), num_classes)
+        model = MobileNetv2((size, size, 3), num_classes, mode=args.mode)
 
+    print(model.summary())
     model = multi_gpu_model(model, gpus=gpu_count) 
 
     opt = Adam()
